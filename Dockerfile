@@ -24,7 +24,7 @@ FROM rhysd/actionlint:1.6.27 as actionlint
 FROM scalameta/scalafmt:v3.8.1 as scalafmt
 FROM zricethezav/gitleaks:v8.18.2 as gitleaks
 FROM yoheimuta/protolint:0.49.4 as protolint
-FROM ghcr.io/clj-kondo/clj-kondo:2024.03.13-alpine as clj-kondo
+FROM ghcr.io/clj-kondo/clj-kondo:2024.03.13 as clj-kondo
 FROM dart:3.3.3-sdk as dart
 FROM mcr.microsoft.com/dotnet/sdk:8.0.203-alpine3.19 as dotnet-sdk
 FROM mcr.microsoft.com/powershell:7.4-alpine-3.17 as powershell
@@ -63,11 +63,17 @@ RUN apk add --no-cache \
 
 SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
 
+ARG TARGETARCH
+
 COPY dependencies/python/ /stage
 WORKDIR /stage
 RUN ./build-venvs.sh && rm -rfv /stage
 
-FROM python:3.12.2-alpine3.19 as npm-builder
+# On arm64, `npm install` gives ECONNRESET errors:
+# ERR! network Client network socket disconnected before secure TLS connection was established
+# 
+# Since we only need node_modules, we can build it on an amd64 image instead
+FROM --platform=$BUILDPLATFORM python:3.12.2-alpine3.19 as npm-builder
 
 RUN apk add --no-cache \
     bash \
@@ -109,8 +115,7 @@ SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
 COPY scripts/install-lintr.sh scripts/install-r-package-or-fail.R /
 RUN /install-lintr.sh && rm -rf /install-lintr.sh /install-r-package-or-fail.R
 
-FROM powershell as powershell-installer
-
+FROM --platform=linux/amd64 powershell as powershell-installer
 # Copy the value of the PowerShell install directory to a file so we can reuse it
 # when copying PowerShell stuff in the main image
 RUN echo "${PS_INSTALL_FOLDER}" > /tmp/PS_INSTALL_FOLDER
@@ -348,7 +353,7 @@ COPY --from=kubeconfrm /kubeconform /usr/bin/
 #####################
 # Install clj-kondo #
 #####################
-COPY --from=clj-kondo /bin/clj-kondo /usr/bin/
+COPY --from=clj-kondo /usr/local/bin/clj-kondo /usr/bin/
 
 ####################
 # Install dart-sdk #
@@ -406,6 +411,8 @@ RUN mkdir /action
 ENTRYPOINT ["/action/lib/linter.sh"]
 
 FROM base_image as slim
+
+ARG TARGETARCH
 
 # Run to build version file and validate image
 ENV IMAGE="slim"
@@ -473,15 +480,18 @@ RUN dotnet help
 #########################################
 COPY --from=powershell-installer /tmp/PS_INSTALL_FOLDER /tmp/PS_INSTALL_FOLDER
 COPY --from=powershell /opt/microsoft/powershell /opt/microsoft/powershell
+ARG TARGETARCH
 # Disable Powershell telemetry
 ENV POWERSHELL_TELEMETRY_OPTOUT=1
 ARG PSSA_VERSION='1.22.0'
-RUN PS_INSTALL_FOLDER="$(cat /tmp/PS_INSTALL_FOLDER)" \
+RUN if [[ "${TARGETARCH}" == "amd64" ]]; then \
+    PS_INSTALL_FOLDER="$(cat /tmp/PS_INSTALL_FOLDER)" \
     && echo "PS_INSTALL_FOLDER: ${PS_INSTALL_FOLDER}" \
     && ln -s "${PS_INSTALL_FOLDER}/pwsh" /usr/bin/pwsh \
     && chmod a+x,o-w "${PS_INSTALL_FOLDER}/pwsh" \
     && pwsh -c "Install-Module -Name PSScriptAnalyzer -RequiredVersion ${PSSA_VERSION} -Scope AllUsers -Force" \
-    && rm -rf /tmp/PS_INSTALL_FOLDER
+    && rm -rf /tmp/PS_INSTALL_FOLDER \
+    ; fi
 
 #############################################################
 # Install Azure Resource Manager Template Toolkit (arm-ttk) #
@@ -491,6 +501,7 @@ RUN --mount=type=secret,id=GITHUB_TOKEN /install-arm-ttk.sh && rm -rf /install-a
 
 # Run to build version file and validate image again because we installed more linters
 ENV IMAGE="standard"
+ARG TARGETARCH
 COPY scripts/linterVersions.sh /
 RUN /linterVersions.sh \
     && rm -rfv /linterVersions.sh
