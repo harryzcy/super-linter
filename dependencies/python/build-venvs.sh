@@ -15,11 +15,11 @@ packages=(
   python3-dev
 )
 
-if [[ "${TARGETARCH}" != "amd64" ]]; then
-  # libffi-dev is required for building wheel for cffi,
-  # until https://github.com/python-cffi/cffi/issues/69 is merged
-  packages+=(libffi-dev)
-fi
+# if [[ "${TARGETARCH}" != "amd64" ]]; then
+#   # libffi-dev is required for building wheel for cffi,
+#   # until https://github.com/python-cffi/cffi/issues/69 is merged
+#   packages+=(libffi-dev)
+# fi
 
 apk add --no-cache --virtual .python-build-deps \
   "${packages[@]}"
