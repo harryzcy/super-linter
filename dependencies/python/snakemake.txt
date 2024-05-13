@@ -1,1 +1,1 @@
-snakemake==8.11.3
+snakemake==8.11.4
